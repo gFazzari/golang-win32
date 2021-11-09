@@ -297,11 +297,19 @@ func (e *PullEventProvider) FetchEvents(channels []string, bookmarks []string, f
 
 	// Create bookmark from xml string passed
 	for i, element := range bookmarks {
-		tmp, err := CreateBookmarkFromXmlString(element)
-		if err != nil {
-			log.LogErrorAndExit(fmt.Errorf("Failed to create new bookmark handle: %v", err))
+		if element == "" {
+			tmp, err := CreateBookmark()
+			if err != nil {
+				log.Error("Cannot create a new bookmark!")
+			}
+			bookmark_handlers[i] = tmp
+		} else {
+			tmp, err := CreateBookmarkFromXmlString(element)
+			if err != nil {
+				log.Errorf("Failed to create bookmark handle from the string: %s", element)
+			}
+			bookmark_handlers[i] = tmp
 		}
-		bookmark_handlers[i] = tmp
 	}
 
 	// Initializing all the events to listen to
