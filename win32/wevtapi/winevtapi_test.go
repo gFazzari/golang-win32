@@ -182,7 +182,7 @@ func TestPullProviderPassive(t *testing.T) {
 
 	wg.Add(1)
 	go func() {
-		for e := range ep.FetchEvents([]string{SysmonChannel, SecurityChannel},
+		for e := range ep.FetchEvents([]string{SysmonChannel, SecurityChannel}, []string{""},
 			EvtSubscribeToFutureEvents) {
 			// Do conversion to json
 			e.ToJSONEvent()
@@ -207,7 +207,7 @@ func TestPullProviderFetchEvents(t *testing.T) {
 
 	wg.Add(1)
 	go func() {
-		for e := range ep.FetchEvents([]string{SysmonChannel, SecurityChannel},
+		for e := range ep.FetchEvents([]string{SysmonChannel, SecurityChannel}, []string{""},
 			EvtSubscribeToFutureEvents) {
 			j := e.ToJSONEvent()
 			channel := j.Event.System.Channel

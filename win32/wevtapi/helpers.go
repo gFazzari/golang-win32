@@ -234,7 +234,7 @@ func GotSignal(signals chan bool) (signal bool, gotsig bool) {
 	return false, false
 }
 
-func enumerateEvents(sub EVT_HANDLE, channel string, out chan *XMLEvent) (err error) {
+func enumerateEvents(sub EVT_HANDLE, channel string, out chan *XMLEvent, book *EVT_HANDLE) (err error) {
 	for {
 		// Try to get events
 		events, err := EvtNext(sub, win32.INFINITE)
@@ -264,6 +264,10 @@ func enumerateEvents(sub EVT_HANDLE, channel string, out chan *XMLEvent) (err er
 			// Pushing reference to XMLEvent into the channel
 			out <- &e
 
+			err = UpdateBookmark(*book, evt)
+			if err != nil {
+				log.Errorf("Cannot update bookmark. Error: %s", err)
+			}
 			// Close the event anyway
 			// Recommended: https://msdn.microsoft.com/en-us/library/windows/desktop/aa385344(v=vs.85).aspx
 			EvtClose(evt)
@@ -274,7 +278,8 @@ func enumerateEvents(sub EVT_HANDLE, channel string, out chan *XMLEvent) (err er
 // PullEventProvider structure definition. Windows event provider using the
 // "Pull" design pattern (i.e. not using callback function from EvtSubscribe).
 type PullEventProvider struct {
-	stop bool
+	stop     bool
+	bookmark EVT_HANDLE
 }
 
 // NewPullEventProvider PullEventProvider constructor
@@ -283,11 +288,21 @@ func NewPullEventProvider() *PullEventProvider {
 }
 
 // FetchEvents implements EventProvider interface
-func (e *PullEventProvider) FetchEvents(channels []string, flag int) (c chan *XMLEvent) {
+func (e *PullEventProvider) FetchEvents(channels []string, bookmarks []string, flag int) (c chan *XMLEvent) {
 	// Prep the chan
 	c = make(chan *XMLEvent, 242)
 	events := make([]win32.HANDLE, len(channels))
 	subs := make([]EVT_HANDLE, len(channels))
+	bookmark_handlers := make([]EVT_HANDLE, len(bookmarks))
+
+	// Create bookmark from xml string passed
+	for i, element := range bookmarks {
+		tmp, err := CreateBookmarkFromXmlString(element)
+		if err != nil {
+			log.LogErrorAndExit(fmt.Errorf("Failed to create new bookmark handle: %v", err))
+		}
+		bookmark_handlers[i] = tmp
+	}
 
 	// Initializing all the events to listen to
 	for i, channel := range channels {
@@ -311,7 +326,7 @@ func (e *PullEventProvider) FetchEvents(channels []string, flag int) (c chan *XM
 			events[i],
 			channel,
 			"*",
-			EVT_HANDLE(win32.NULL),
+			bookmark_handlers[i],
 			win32.PVOID(win32.NULL),
 			win32.DWORD(flag))
 
@@ -358,7 +373,7 @@ func (e *PullEventProvider) FetchEvents(channels []string, flag int) (c chan *XM
 				// it did it already and we reset the event) so WaitForSingleObject will return
 				// only timeouts. Took a while to find this explaination ...
 				kernel32.ResetEvent(events[rc])
-				if err := enumerateEvents(subs[rc], channels[rc], c); err.(syscall.Errno) != win32.ERROR_NO_MORE_ITEMS {
+				if err := enumerateEvents(subs[rc], channels[rc], c, &e.bookmark); err.(syscall.Errno) != win32.ERROR_NO_MORE_ITEMS {
 					// If != of Exit Success
 					if err.(syscall.Errno) != 0 {
 						log.Errorf("Failed to enumerate events for channel %s: %s", channels[rc], err)
@@ -375,8 +390,14 @@ func (e *PullEventProvider) FetchEvents(channels []string, flag int) (c chan *XM
 }
 
 // Stop implements EventProvider interface
-func (e *PullEventProvider) Stop() {
+func (e *PullEventProvider) Stop() string {
 	e.stop = true
+	bookmark, err := RenderBookmark(e.bookmark)
+	if err != nil {
+		return ""
+	} else {
+		return bookmark
+	}
 }
 
 /////////////////////////// PushEventProvider //////////////////////////////////

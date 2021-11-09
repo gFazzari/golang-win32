@@ -137,3 +137,49 @@ func EvtRenderXML(Context EVT_HANDLE) ([]byte, error) {
 	}
 	return buffer[:BufferUsed], nil
 }
+
+func EvtRenderBook(Context EVT_HANDLE) ([]byte, error) {
+	// 65536 buffsize
+	const buffSize = 0x1 << 16
+	var buffer [buffSize]byte
+	var BufferUsed win32.DWORD
+	var PropertyCount win32.DWORD
+
+	r1, _, lastErr := evtRender.Call(
+		uintptr(0),
+		uintptr(Context),
+		uintptr(EvtRenderBookmark),
+		uintptr(buffSize),
+		uintptr(unsafe.Pointer(&buffer[0])),
+		uintptr(unsafe.Pointer(&BufferUsed)),
+		uintptr(unsafe.Pointer(&PropertyCount)))
+	// log.Debugf("BufferUsed = %d", BufferUsed)
+	if win32.BOOL(r1) == win32.FALSE {
+		return buffer[:], lastErr
+	}
+	return buffer[:BufferUsed], nil
+}
+
+func EvtCreateBookmark(BookmarkXml *uint16) (EVT_HANDLE, error) {
+	r1, _, err := evtCreateBookmark.Call(uintptr(unsafe.Pointer(BookmarkXml)))
+	if r1 == 0 {
+		return 0, err
+	}
+	return EVT_HANDLE(r1), nil
+}
+
+func EvtUpdateBookmark(Bookmark, Event EVT_HANDLE) error {
+	r1, _, err := evtUpdateBookmark.Call(uintptr(Bookmark), uintptr(Event))
+	if r1 == 0 {
+		return err
+	}
+	return nil
+}
+
+func EvtRender(Context, Fragment syscall.Handle, Flags, BufferSize uint32, Buffer *uint16, BufferUsed, PropertyCount *uint32) error {
+	r1, _, err := evtRender.Call(uintptr(Context), uintptr(Fragment), uintptr(Flags), uintptr(BufferSize), uintptr(unsafe.Pointer(Buffer)), uintptr(unsafe.Pointer(BufferUsed)), uintptr(unsafe.Pointer(PropertyCount)))
+	if r1 == 0 {
+		return err
+	}
+	return nil
+}
