@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"os"
 	"syscall"
 	"unsafe"
 
@@ -307,6 +308,7 @@ func (e *PullEventProvider) FetchEvents(channels []string, bookmarks []string, f
 			tmp, err := CreateBookmarkFromXmlString(element)
 			if err != nil {
 				log.Errorf("Failed to create bookmark handle from the string: %s", element)
+				os.Exit(1)
 			}
 			bookmark_handlers[i] = tmp
 		}
@@ -318,7 +320,8 @@ func (e *PullEventProvider) FetchEvents(channels []string, bookmarks []string, f
 		// If we reuse name, we reuse event, even across processes
 		eUUID, err := win32.UUID()
 		if err != nil {
-			log.LogErrorAndExit(fmt.Errorf("Cannot generate UUID: %s", err))
+			log.Errorf("Cannot generate UUID: %s", err)
+			os.Exit(1)
 		}
 
 		log.Debugf("Windows Event UUID (Channel:%s): %s", channel, eUUID)
