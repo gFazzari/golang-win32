@@ -235,7 +235,7 @@ func GotSignal(signals chan bool) (signal bool, gotsig bool) {
 	return false, false
 }
 
-func enumerateEvents(sub EVT_HANDLE, channel string, out chan *XMLEvent, book *EVT_HANDLE) (err error) {
+func enumerateEvents(sub EVT_HANDLE, channel string, out chan *XMLEvent, book_evt *EVT_HANDLE, book_str *string) (err error) {
 	for {
 		// Try to get events
 		events, err := EvtNext(sub, win32.INFINITE)
@@ -264,11 +264,13 @@ func enumerateEvents(sub EVT_HANDLE, channel string, out chan *XMLEvent, book *E
 			}
 			// Pushing reference to XMLEvent into the channel
 			out <- &e
-
-			err = UpdateBookmark(*book, evt)
+			tmp, _ := CreateBookmark()
+			err = UpdateBookmark(tmp, evt)
 			if err != nil {
 				log.Errorf("Cannot update bookmark. Error: %s", err)
 			}
+			*book_evt = tmp
+			*book_str, _ = RenderBookmark(*book_evt)
 			// Close the event anyway
 			// Recommended: https://msdn.microsoft.com/en-us/library/windows/desktop/aa385344(v=vs.85).aspx
 			EvtClose(evt)
@@ -279,13 +281,17 @@ func enumerateEvents(sub EVT_HANDLE, channel string, out chan *XMLEvent, book *E
 // PullEventProvider structure definition. Windows event provider using the
 // "Pull" design pattern (i.e. not using callback function from EvtSubscribe).
 type PullEventProvider struct {
-	stop     bool
-	bookmark EVT_HANDLE
+	stop      bool
+	book_evts []EVT_HANDLE
+	Bookmarks []string
 }
 
 // NewPullEventProvider PullEventProvider constructor
 func NewPullEventProvider() *PullEventProvider {
-	return &PullEventProvider{}
+	return &PullEventProvider{
+		book_evts: make([]EVT_HANDLE, 64),
+		Bookmarks: make([]string, 64),
+	}
 }
 
 // FetchEvents implements EventProvider interface
@@ -364,6 +370,12 @@ func (e *PullEventProvider) FetchEvents(channels []string, bookmarks []string, f
 				kernel32.CloseHandle(event)
 			}
 		}()
+		// Closing bookmark handlers
+		defer func() {
+			for _, sub := range subs {
+				EvtClose(sub)
+			}
+		}()
 
 	PollLoop:
 		for !e.stop {
@@ -384,7 +396,7 @@ func (e *PullEventProvider) FetchEvents(channels []string, bookmarks []string, f
 				// it did it already and we reset the event) so WaitForSingleObject will return
 				// only timeouts. Took a while to find this explaination ...
 				kernel32.ResetEvent(events[rc])
-				if err := enumerateEvents(subs[rc], channels[rc], c, &e.bookmark); err.(syscall.Errno) != win32.ERROR_NO_MORE_ITEMS {
+				if err := enumerateEvents(subs[rc], channels[rc], c, &e.book_evts[rc], &e.Bookmarks[rc]); err.(syscall.Errno) != win32.ERROR_NO_MORE_ITEMS {
 					// If != of Exit Success
 					if err.(syscall.Errno) != 0 {
 						log.Errorf("Failed to enumerate events for channel %s: %s", channels[rc], err)
@@ -401,14 +413,8 @@ func (e *PullEventProvider) FetchEvents(channels []string, bookmarks []string, f
 }
 
 // Stop implements EventProvider interface
-func (e *PullEventProvider) Stop() string {
+func (e *PullEventProvider) Stop() {
 	e.stop = true
-	bookmark, err := RenderBookmark(e.bookmark)
-	if err != nil {
-		return ""
-	} else {
-		return bookmark
-	}
 }
 
 /////////////////////////// PushEventProvider //////////////////////////////////
