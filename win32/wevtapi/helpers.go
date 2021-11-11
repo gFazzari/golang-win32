@@ -5,7 +5,6 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
-	"os"
 	"syscall"
 	"unsafe"
 
@@ -235,7 +234,7 @@ func GotSignal(signals chan bool) (signal bool, gotsig bool) {
 	return false, false
 }
 
-func enumerateEvents(sub EVT_HANDLE, channel string, out chan *XMLEvent, book_evt *EVT_HANDLE, book_str *string) (err error) {
+func enumerateEventsBookmark(sub EVT_HANDLE, channel string, out chan *XMLEvent, book_evt *EVT_HANDLE, book_str *string) (err error) {
 	for {
 		// Try to get events
 		events, err := EvtNext(sub, win32.INFINITE)
@@ -267,13 +266,15 @@ func enumerateEvents(sub EVT_HANDLE, channel string, out chan *XMLEvent, book_ev
 			tmp, _ := CreateBookmark()
 			err = UpdateBookmark(tmp, evt)
 			if err != nil {
-				log.Errorf("Cannot update bookmark. Error: %s", err)
+				log.Errorf("Cannot update bookmark after receiving an event. Error: %s", err)
+				return err
 			}
 			*book_evt = tmp
 			*book_str, _ = RenderBookmark(*book_evt)
 			// Close the event anyway
 			// Recommended: https://msdn.microsoft.com/en-us/library/windows/desktop/aa385344(v=vs.85).aspx
 			EvtClose(evt)
+			EvtClose(tmp)
 		}
 	}
 }
@@ -288,36 +289,33 @@ type PullEventProvider struct {
 
 // NewPullEventProvider PullEventProvider constructor
 func NewPullEventProvider() *PullEventProvider {
-	return &PullEventProvider{
-		book_evts: make([]EVT_HANDLE, 64),
-		Bookmarks: make([]string, 64),
-	}
+	return &PullEventProvider{}
 }
 
 // FetchEvents implements EventProvider interface
 func (e *PullEventProvider) FetchEvents(channels []string, bookmarks []string, flag int) (c chan *XMLEvent) {
+	// Instanciate attributes
+	e.book_evts = make([]EVT_HANDLE, len(channels))
+	e.Bookmarks = make([]string, len(channels))
+
 	// Prep the chan
 	c = make(chan *XMLEvent, 242)
 	events := make([]win32.HANDLE, len(channels))
 	subs := make([]EVT_HANDLE, len(channels))
-	bookmark_handlers := make([]EVT_HANDLE, len(bookmarks))
+	bookmark_handlers := make([]EVT_HANDLE, len(channels))
 
-	// Create bookmark from xml string passed
+	// Create bookmark from xml strings passed
 	for i, element := range bookmarks {
-		if element == "" {
-			tmp, err := CreateBookmark()
+		var tmp EVT_HANDLE
+		var err error
+		if tmp, err = CreateBookmarkFromXmlString(element); err != nil {
+			tmp, err = CreateBookmark()
 			if err != nil {
-				log.Error("Cannot create a new bookmark!")
+				close(c)
+				return
 			}
-			bookmark_handlers[i] = tmp
-		} else {
-			tmp, err := CreateBookmarkFromXmlString(element)
-			if err != nil {
-				log.Errorf("Failed to create bookmark handle from the string: %s", element)
-				os.Exit(1)
-			}
-			bookmark_handlers[i] = tmp
 		}
+		bookmark_handlers[i] = tmp
 	}
 
 	// Initializing all the events to listen to
@@ -327,7 +325,8 @@ func (e *PullEventProvider) FetchEvents(channels []string, bookmarks []string, f
 		eUUID, err := win32.UUID()
 		if err != nil {
 			log.Errorf("Cannot generate UUID: %s", err)
-			os.Exit(1)
+			close(c)
+			return
 		}
 
 		log.Debugf("Windows Event UUID (Channel:%s): %s", channel, eUUID)
@@ -338,17 +337,41 @@ func (e *PullEventProvider) FetchEvents(channels []string, bookmarks []string, f
 			return
 		}
 
-		subs[i], err = EvtPullSubscribe(
-			EVT_HANDLE(win32.NULL),
-			events[i],
-			channel,
-			"*",
-			bookmark_handlers[i],
-			win32.PVOID(win32.NULL),
-			win32.DWORD(flag))
-
-		if err != nil {
-			log.Errorf("Failed to subscribe to channel \"%s\": %s", channel, err)
+		switch flag {
+		case EvtSubscribeToFutureEvents, EvtSubscribeStartAtOldestRecord:
+			{
+				subs[i], err = EvtPullSubscribe(
+					EVT_HANDLE(win32.NULL),
+					events[i],
+					channel,
+					"*",
+					EVT_HANDLE(win32.NULL),
+					win32.PVOID(win32.NULL),
+					win32.DWORD(flag))
+				if err != nil {
+					log.Errorf("Failed to subscribe to future events of the channel \"%s\": %s", channel, err)
+					close(c)
+					return
+				}
+			}
+		case EvtSubscribeStartAfterBookmark, EvtSubscribeStartAfterBookmark | EvtSubscribeStrict:
+			{
+				subs[i], err = EvtPullSubscribe(
+					EVT_HANDLE(win32.NULL),
+					events[i],
+					channel,
+					"*",
+					bookmark_handlers[i],
+					win32.PVOID(win32.NULL),
+					win32.DWORD(flag))
+				if err != nil {
+					log.Errorf("Failed to subscribe to events of the channel \"%s\": %s", channel, err)
+					close(c)
+					return
+				}
+			}
+		default:
+			log.Errorf("Not supported method %d !", flag)
 			close(c)
 			return
 		}
@@ -372,8 +395,8 @@ func (e *PullEventProvider) FetchEvents(channels []string, bookmarks []string, f
 		}()
 		// Closing bookmark handlers
 		defer func() {
-			for _, sub := range subs {
-				EvtClose(sub)
+			for _, book_handler := range bookmark_handlers {
+				EvtClose(book_handler)
 			}
 		}()
 
@@ -396,7 +419,7 @@ func (e *PullEventProvider) FetchEvents(channels []string, bookmarks []string, f
 				// it did it already and we reset the event) so WaitForSingleObject will return
 				// only timeouts. Took a while to find this explaination ...
 				kernel32.ResetEvent(events[rc])
-				if err := enumerateEvents(subs[rc], channels[rc], c, &e.book_evts[rc], &e.Bookmarks[rc]); err.(syscall.Errno) != win32.ERROR_NO_MORE_ITEMS {
+				if err := enumerateEventsBookmark(subs[rc], channels[rc], c, &e.book_evts[rc], &e.Bookmarks[rc]); err.(syscall.Errno) != win32.ERROR_NO_MORE_ITEMS {
 					// If != of Exit Success
 					if err.(syscall.Errno) != 0 {
 						log.Errorf("Failed to enumerate events for channel %s: %s", channels[rc], err)
