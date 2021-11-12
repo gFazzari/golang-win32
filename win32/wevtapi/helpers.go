@@ -314,6 +314,7 @@ func (e *PullEventProvider) FetchEvents(channels []string, bookmarks []string, f
 				close(c)
 				return
 			}
+			flag = EvtSubscribeToFutureEvents // If the bookmark is not found start subscription from now (defualt would be all the history)
 		}
 		bookmark_handlers[i] = tmp
 	}
