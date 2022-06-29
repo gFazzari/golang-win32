@@ -246,6 +246,9 @@ func enumerateEventsBookmark(sub EVT_HANDLE, channel string, out chan *XMLEvent,
 		// Looping over the events retrieved
 		for _, evt := range events {
 
+			// Defer evt closing
+			defer EvtClose(evt)
+
 			// Render event to XML
 			data, err := EvtRenderXML(evt)
 			if err != nil {
@@ -264,6 +267,8 @@ func enumerateEventsBookmark(sub EVT_HANDLE, channel string, out chan *XMLEvent,
 			// Pushing reference to XMLEvent into the channel
 			out <- &e
 			tmp, _ := CreateBookmark()
+			// Defer evt closing
+			defer EvtClose(tmp)
 			err = UpdateBookmark(tmp, evt)
 			if err != nil {
 				log.Errorf("Cannot update bookmark after receiving an event. Error: %s", err)
@@ -273,8 +278,6 @@ func enumerateEventsBookmark(sub EVT_HANDLE, channel string, out chan *XMLEvent,
 			*book_str, _ = RenderBookmark(*book_evt)
 			// Close the event anyway
 			// Recommended: https://msdn.microsoft.com/en-us/library/windows/desktop/aa385344(v=vs.85).aspx
-			EvtClose(evt)
-			EvtClose(tmp)
 		}
 	}
 }
