@@ -131,7 +131,6 @@ func EvtRenderXML(Context EVT_HANDLE) ([]byte, error) {
 		uintptr(unsafe.Pointer(&buffer[0])),
 		uintptr(unsafe.Pointer(&BufferUsed)),
 		uintptr(unsafe.Pointer(&PropertyCount)))
-	// log.Debugf("BufferUsed = %d", BufferUsed)
 	if win32.BOOL(r1) == win32.FALSE {
 		return buffer[:], lastErr
 	}
